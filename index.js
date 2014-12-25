@@ -1,7 +1,7 @@
 'use strict';
 
 var Metalsmith = require('metalsmith');
-var s3util     = require('./lib/s3util');
+var fakeS3     = require('./lib/fakeS3');
 var each       = require('async').each;
 var front      = require('front-matter');
 var utf8       = require('is-utf8');
@@ -11,6 +11,16 @@ var templates   = require('metalsmith-templates');
 var collections = require('metalsmith-collections');
 var draft       = require('metalsmith-drafts');
 
+var config = require('./config.json');
+var destBucket = new fakeS3({
+  region: config.region,
+  params: {Bucket: config.destinationBucket}
+});
+var sourceBucket = new fakeS3({
+  region: config.region,
+  params: {Bucket: config.sourceBucket}
+});
+
 
 /**
  * rewriting Metalsmith methods
@@ -19,7 +29,7 @@ var draft       = require('metalsmith-drafts');
 Metalsmith.prototype.read = function(cb) {
   var files = {};
   var parse = this.frontmatter();
-  s3util.readdir(function(err, arr) {
+  sourceBucket.readdir(function(err, arr) {
     if(err) return cb(err);
     
     each(arr, read, function(err) {
@@ -27,7 +37,7 @@ Metalsmith.prototype.read = function(cb) {
     });
 
     function read(readParam, done) {
-      s3util.readFile(readParam, function(err, buffer) {
+      sourceBucket.readFile(readParam, function(err, buffer) {
         if (err) return done(err);
         var file = {};
 
@@ -47,12 +57,11 @@ Metalsmith.prototype.read = function(cb) {
 };
 
 Metalsmith.prototype.write = function(files, cb) {
-  var dest = this.destination();
   each(Object.keys(files), write, cb);
 
   function write(file, done) {
     var data = files[file];
-    return s3util.writeFile(file, data.contents, data.contentType, function (err) {
+    return destBucket.writeFile(file, data.contents, data.contentType, function (err) {
       if (err) return done(err);
       done();
     });
@@ -62,9 +71,8 @@ Metalsmith.prototype.write = function(files, cb) {
 Metalsmith.prototype.build = function (cb) {
   var self = this;
   var clean = this.clean();
-  var dest = this.destination();
   if (clean) {
-    s3util.rmFiles(function(err, data) {
+    destBucket.removeFiles(function(err, data) {
       if (err) return cb(err);
       self.read(function(err, files) {
         if (err) return cb(err);
